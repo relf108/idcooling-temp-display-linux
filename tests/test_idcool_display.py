@@ -47,9 +47,8 @@ class WriteTests(unittest.TestCase):
 
     def test_rejects_short_write(self) -> None:
         report = driver.frame(driver.CMD_SHOW, 1)
-        with mock.patch.object(driver.os, "write", return_value=64):
-            with self.assertRaises(driver.DriverError):
-                driver.write_report(7, report)
+        with mock.patch.object(driver.os, "write", return_value=64), self.assertRaises(driver.DriverError):
+            driver.write_report(7, report)
 
     def test_rejects_wrong_report_length(self) -> None:
         with self.assertRaises(ValueError):
@@ -62,14 +61,16 @@ class HidIdTests(unittest.TestCase):
             with self.subTest(identity=identity):
                 self.assertEqual(
                     driver._parse_hid_id(
-                        f"DRIVER=hid-generic\nHID_ID={identity}\nHID_NAME=IDCOOL-C\n"
+                        f"DRIVER=hid-generic\nHID_ID={identity}\nHID_NAME=IDCOOL-C\n",
                     ),
                     (0x03, 0x1A86, 0xE317),
                 )
 
     def test_missing_hid_id(self) -> None:
         for text in (
-            "", "HID_NAME=IDCOOL-C\n", "OTHER_HID_ID=0003:00001A86:0000E317"
+            "",
+            "HID_NAME=IDCOOL-C\n",
+            "OTHER_HID_ID=0003:00001A86:0000E317",
         ):
             with self.subTest(text=text):
                 self.assertIsNone(driver._parse_hid_id(text))
@@ -88,10 +89,15 @@ class HidIdTests(unittest.TestCase):
 class DeviceTests(unittest.TestCase):
     @staticmethod
     def _ioctl_identity(
-        bus: int, vendor: int, product: int
+        bus: int,
+        vendor: int,
+        product: int,
     ) -> Callable[[int, int, bytearray, bool], int]:
         def fake_ioctl(
-            _fd: int, request: int, buffer: bytearray, mutate: bool
+            _fd: int,
+            request: int,
+            buffer: bytearray,
+            mutate: bool,
         ) -> int:
             if request != driver.HIDIOCGRAWINFO or not mutate:
                 raise AssertionError("unexpected ioctl call")
@@ -104,7 +110,9 @@ class DeviceTests(unittest.TestCase):
     def test_accepts_expected_open_device(self, fstat: mock.MagicMock) -> None:
         fstat.return_value.st_mode = stat.S_IFCHR
         ioctl = self._ioctl_identity(
-            driver.USB_BUS_TYPE, driver.USB_VENDOR_ID, driver.USB_PRODUCT_ID
+            driver.USB_BUS_TYPE,
+            driver.USB_VENDOR_ID,
+            driver.USB_PRODUCT_ID,
         )
         with mock.patch.object(driver.fcntl, "ioctl", side_effect=ioctl):
             driver.verify_open_device(7, Path("/dev/hidraw7"))
@@ -113,9 +121,8 @@ class DeviceTests(unittest.TestCase):
     def test_rejects_wrong_open_device(self, fstat: mock.MagicMock) -> None:
         fstat.return_value.st_mode = stat.S_IFCHR
         ioctl = self._ioctl_identity(driver.USB_BUS_TYPE, 0x1234, 0x5678)
-        with mock.patch.object(driver.fcntl, "ioctl", side_effect=ioctl):
-            with self.assertRaises(driver.DriverError):
-                driver.verify_open_device(7, Path("/dev/hidraw7"))
+        with mock.patch.object(driver.fcntl, "ioctl", side_effect=ioctl), self.assertRaises(driver.DriverError):
+            driver.verify_open_device(7, Path("/dev/hidraw7"))
 
     @mock.patch.object(driver.os, "fstat")
     def test_rejects_non_character_device(self, fstat: mock.MagicMock) -> None:
@@ -232,17 +239,22 @@ class SensorTests(unittest.TestCase):
 
 class SampleTests(unittest.TestCase):
     def test_rejects_unknown_metric_without_reading_frequency(self) -> None:
-        with mock.patch.object(
-            driver, "read_cpu_freq_mhz", return_value=3000
-        ) as read:
-            with self.assertRaisesRegex(ValueError, "unknown"):
-                driver.make_sample("unknown", None)  # type: ignore[arg-type]
+        with (
+            mock.patch.object(
+                driver,
+                "read_cpu_freq_mhz",
+                return_value=3000,
+            ) as read,
+            self.assertRaisesRegex(ValueError, "unknown"),
+        ):
+            driver.make_sample("unknown", None)  # type: ignore[arg-type]
         read.assert_not_called()
 
     def test_frequency_metric(self) -> None:
         with mock.patch.object(driver, "read_cpu_freq_mhz", return_value=3000.4):
             self.assertEqual(
-                driver.make_sample("freq", None), (driver.CMD_CPU_FREQUENCY, 3000)
+                driver.make_sample("freq", None),
+                (driver.CMD_CPU_FREQUENCY, 3000),
             )
 
 
@@ -251,7 +263,7 @@ class MainTests(unittest.TestCase):
         stack = ExitStack()
         self.addCleanup(stack.close)
         self.open_device = stack.enter_context(
-            mock.patch.object(driver, "open_device", return_value=7)
+            mock.patch.object(driver, "open_device", return_value=7),
         )
         self.close = stack.enter_context(mock.patch.object(driver.os, "close"))
         self.write = stack.enter_context(mock.patch.object(driver, "write_report"))
@@ -265,14 +277,18 @@ class MainTests(unittest.TestCase):
         # A finite sequence makes a missing cap fail rather than hang the suite.
         self.sample.side_effect = [error] * 10 + [AssertionError("retry cap exceeded")]
         with self.assertRaisesRegex(
-            driver.DriverError, "failed 10 times in a row"
+            driver.DriverError,
+            "failed 10 times in a row",
         ) as raised:
             driver.main(self.argv)
         self.assertIs(raised.exception.__cause__, error)
         self.assertEqual(self.sample.call_count, 10)
         self.assertEqual(self.warning.call_count, 10)
         self.warning.assert_called_with(
-            "skipping invalid sensor sample (%d/%d): %s", 10, 10, error
+            "skipping invalid sensor sample (%d/%d): %s",
+            10,
+            10,
+            error,
         )
         self.assertEqual(self.sleep.call_count, 9)
         self.write.assert_called_once_with(7, driver.frame(driver.CMD_SHOW, 1))
@@ -281,10 +297,7 @@ class MainTests(unittest.TestCase):
     def test_success_resets_consecutive_failure_count(self) -> None:
         error = ValueError("sensor unavailable")
         self.sample.side_effect = (
-            [error] * 9
-            + [(driver.CMD_CPU_TEMPERATURE, 77)]
-            + [error] * 10
-            + [AssertionError("retry cap exceeded")]
+            [error] * 9 + [(driver.CMD_CPU_TEMPERATURE, 77)] + [error] * 10 + [AssertionError("retry cap exceeded")]
         )
         with self.assertRaisesRegex(driver.DriverError, "failed 10 times in a row"):
             driver.main(self.argv)
@@ -292,19 +305,23 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.sleep.call_count, 19)
         self.assertEqual(self.warning.call_count, 19)
         self.assertEqual(self.warning.call_args_list[9].args[1:3], (1, 10))
-        self.assertEqual(self.write.call_args_list, [
-            mock.call(7, driver.frame(driver.CMD_SHOW, 1)),
-            mock.call(7, driver.frame(driver.CMD_CPU_TEMPERATURE, 77)),
-        ])
+        self.assertEqual(
+            self.write.call_args_list,
+            [
+                mock.call(7, driver.frame(driver.CMD_SHOW, 1)),
+                mock.call(7, driver.frame(driver.CMD_CPU_TEMPERATURE, 77)),
+            ],
+        )
         self.close.assert_called_once_with(7)
 
     def test_once_fails_immediately_and_closes_device(self) -> None:
         error = ValueError("sensor unavailable")
         self.sample.side_effect = error
         with self.assertRaisesRegex(
-            driver.DriverError, "sensor unavailable"
+            driver.DriverError,
+            "sensor unavailable",
         ) as raised:
-            driver.main(self.argv + ["--once"])
+            driver.main([*self.argv, "--once"])
         self.assertIs(raised.exception.__cause__, error)
         self.sample.assert_called_once()
         self.sleep.assert_not_called()
@@ -314,12 +331,15 @@ class MainTests(unittest.TestCase):
 
     def test_once_writes_one_sample_and_closes_device(self) -> None:
         self.sample.return_value = (driver.CMD_CPU_TEMPERATURE, 77)
-        driver.main(self.argv + ["--once"])
+        driver.main([*self.argv, "--once"])
         self.sample.assert_called_once()
-        self.assertEqual(self.write.call_args_list, [
-            mock.call(7, driver.frame(driver.CMD_SHOW, 1)),
-            mock.call(7, driver.frame(driver.CMD_CPU_TEMPERATURE, 77)),
-        ])
+        self.assertEqual(
+            self.write.call_args_list,
+            [
+                mock.call(7, driver.frame(driver.CMD_SHOW, 1)),
+                mock.call(7, driver.frame(driver.CMD_CPU_TEMPERATURE, 77)),
+            ],
+        )
         self.sleep.assert_not_called()
         self.warning.assert_not_called()
         self.close.assert_called_once_with(7)
@@ -329,7 +349,8 @@ class ArgumentTests(unittest.TestCase):
     def test_parser_populates_typed_namespace(self) -> None:
         args = driver.Arguments()
         _ = driver.build_argument_parser().parse_args(
-            ["--metric", "usage", "--device", "/dev/hidraw7"], namespace=args
+            ["--metric", "usage", "--device", "/dev/hidraw7"],
+            namespace=args,
         )
         self.assertEqual(args.metric, "usage")
         self.assertEqual(args.device, Path("/dev/hidraw7"))
@@ -338,8 +359,11 @@ class ArgumentTests(unittest.TestCase):
     def test_interval_rate_limit(self) -> None:
         self.assertEqual(driver.interval_arg("1"), 1.0)
         for value in ("0", "-1", "nan", "inf", "0.1"):
-            with self.subTest(value=value), self.assertRaises(
-                argparse.ArgumentTypeError
+            with (
+                self.subTest(value=value),
+                self.assertRaises(
+                    argparse.ArgumentTypeError,
+                ),
             ):
                 driver.interval_arg(value)
 

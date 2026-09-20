@@ -58,6 +58,9 @@ USB_BUS_TYPE = 0x03
 REPORT_LEN = 64
 MIN_INTERVAL = 0.2  # Avoid accidentally flooding the USB device with reports.
 MAX_CONSECUTIVE_FAILURES = 10
+# /proc/stat layout: "cpu" label plus at least user, nice, system, idle.
+_PROC_STAT_MIN_FIELDS = 5
+_PROC_STAT_IOWAIT_FIELD = 4  # Index of the iowait counter, when present.
 LOGGER = logging.getLogger(__name__)
 Metric = Literal["temp", "usage", "freq"]
 
@@ -120,12 +123,13 @@ def interval_arg(text: str) -> float:
         raise argparse.ArgumentTypeError("interval must be a number") from exc
     if not math.isfinite(value) or value < MIN_INTERVAL:
         raise argparse.ArgumentTypeError(
-            f"interval must be finite and at least {MIN_INTERVAL} seconds"
+            f"interval must be finite and at least {MIN_INTERVAL} seconds",
         )
     return value
 
 
 def nonnegative_int_arg(text: str) -> int:
+    """Parse a non-negative integer argument."""
     try:
         value = int(text)
     except ValueError as exc:
@@ -143,12 +147,11 @@ def _parse_hid_id(uevent: str) -> tuple[int, int, int] | None:
             continue
         try:
             values = line.split("=", 1)[1].split(":")
-            if len(values) != 3:
-                return None
             bus, vendor, product = (int(value, 16) for value in values)
-            return bus, vendor, product
         except ValueError:
             return None
+        else:
+            return bus, vendor, product
     return None
 
 
@@ -181,8 +184,7 @@ def wait_for_device(timeout: int) -> Path:
             break
         time.sleep(min(1.0, remaining))
     raise DriverError(
-        f"ID-COOLING display ({USB_VENDOR_ID:04X}:{USB_PRODUCT_ID:04X}) "
-        + "not found; check that it is connected"
+        f"ID-COOLING display ({USB_VENDOR_ID:04X}:{USB_PRODUCT_ID:04X}) not found; check that it is connected",
     )
 
 
@@ -198,7 +200,7 @@ def verify_open_device(fd: int, path: Path) -> None:
 
     info = bytearray(_HIDRAW_DEVINFO_SIZE)
     try:
-        _ = fcntl.ioctl(fd, HIDIOCGRAWINFO, info, True)
+        _ = fcntl.ioctl(fd, HIDIOCGRAWINFO, info, True)  # noqa: FBT003 - stdlib ioctl takes mutate_flag as positional-only
     except OSError as exc:
         raise DriverError(f"{path} is not a usable hidraw device: {exc}") from exc
 
@@ -206,8 +208,8 @@ def verify_open_device(fd: int, path: Path) -> None:
     if (bus, vendor, product) != (USB_BUS_TYPE, USB_VENDOR_ID, USB_PRODUCT_ID):
         raise DriverError(
             f"refusing to use {path}: expected USB "
-            + f"{USB_VENDOR_ID:04x}:{USB_PRODUCT_ID:04x}, got bus {bus} "
-            + f"{vendor:04x}:{product:04x}"
+            f"{USB_VENDOR_ID:04x}:{USB_PRODUCT_ID:04x}, got bus {bus} "
+            f"{vendor:04x}:{product:04x}",
         )
 
 
@@ -229,7 +231,7 @@ def open_device(path: Path) -> int:
 
 
 # Protocol encoding
-def frame(cmd: int, value: int | float) -> bytes:
+def frame(cmd: int, value: float) -> bytes:
     """Encode one validated 64-byte command report."""
     if cmd not in COMMAND_RANGES:
         raise ValueError(f"unknown display command: {cmd!r}")
@@ -245,8 +247,7 @@ def frame(cmd: int, value: int | float) -> bytes:
     minimum, maximum = COMMAND_RANGES[cmd]
     if not minimum <= value <= maximum:
         raise ValueError(
-            f"value {value} is outside the safe range {minimum}..{maximum} "
-            + f"for command {cmd}"
+            f"value {value} is outside the safe range {minimum}..{maximum} for command {cmd}",
         )
 
     hi, lo = (value >> 8) & 0xFF, value & 0xFF
@@ -277,6 +278,20 @@ def _read_text(path: Path) -> str:
         return fh.read().strip()
 
 
+def _labelled_temp_input(hwmon_path: Path, wanted: str) -> Path | None:
+    """Return the temp input whose label matches, or None."""
+    for label in sorted(hwmon_path.glob("temp*_label")):
+        try:
+            if _read_text(label) == wanted:
+                path = label.with_name(label.stem[: -len("_label")] + "_input")
+                if not path.is_file():
+                    continue
+                return path
+        except OSError:
+            continue
+    return None
+
+
 def find_temp_path(hwmon_root: Path | None = None) -> Path:
     """Find a known CPU package sensor, never an arbitrary hwmon input."""
     if hwmon_root is None:
@@ -288,18 +303,6 @@ def find_temp_path(hwmon_root: Path | None = None) -> Path:
         except OSError:
             continue
 
-    def labelled(hwmon_path: Path, wanted: str) -> Path | None:
-        for label in sorted(hwmon_path.glob("temp*_label")):
-            try:
-                if _read_text(label) == wanted:
-                    path = label.with_name(label.stem[: -len("_label")] + "_input")
-                    if not path.is_file():
-                        continue
-                    return path
-            except OSError:
-                continue
-        return None
-
     for driver_name, label in (
         ("k10temp", "Tctl"),
         ("zenpower", "Tctl"),
@@ -309,7 +312,7 @@ def find_temp_path(hwmon_root: Path | None = None) -> Path:
             if name != driver_name:
                 continue
             fallback = hwmon_path / "temp1_input"
-            candidate = labelled(hwmon_path, label)
+            candidate = _labelled_temp_input(hwmon_path, label)
             if candidate:
                 return candidate
             if fallback.is_file():
@@ -317,12 +320,12 @@ def find_temp_path(hwmon_root: Path | None = None) -> Path:
 
     detected = ", ".join(sorted(set(hwmons.values()))) or "none"
     raise DriverError(
-        "no supported CPU temperature sensor found "
-        + f"(detected hwmon drivers: {detected}); select one with --temp-path"
+        f"no supported CPU temperature sensor found (detected hwmon drivers: {detected}); select one with --temp-path",
     )
 
 
 def read_temp_c(path: Path) -> float:
+    """Read a millidegree sysfs input and return a validated Celsius value."""
     try:
         millidegrees = int(_read_text(path))
     except (OSError, ValueError) as exc:
@@ -332,8 +335,7 @@ def read_temp_c(path: Path) -> float:
     minimum, maximum = COMMAND_RANGES[CMD_CPU_TEMPERATURE]
     if not minimum <= temperature <= maximum:
         raise ValueError(
-            f"implausible CPU temperature from {path}: {temperature:.1f} °C "
-            + f"(expected {minimum}..{maximum} °C)"
+            f"implausible CPU temperature from {path}: {temperature:.1f} °C (expected {minimum}..{maximum} °C)",
         )
     return temperature
 
@@ -344,13 +346,16 @@ def read_cpu_usage() -> float:
     def snap() -> tuple[int, int]:
         try:
             fields = _read_text(Path("/proc/stat")).splitlines()[0].split()
-            if not fields or fields[0] != "cpu" or len(fields) < 5:
-                raise ValueError("unexpected first line")
+        except (OSError, IndexError) as exc:
+            raise ValueError(f"cannot parse /proc/stat: {exc}") from exc
+        if not fields or fields[0] != "cpu" or len(fields) < _PROC_STAT_MIN_FIELDS:
+            raise ValueError("cannot parse /proc/stat: unexpected first line")
+        try:
             # guest and guest_nice are already included in user and nice.
             counters = [int(value) for value in fields[1:9]]
-        except (OSError, ValueError, IndexError) as exc:
+        except ValueError as exc:
             raise ValueError(f"cannot parse /proc/stat: {exc}") from exc
-        idle = counters[3] + (counters[4] if len(counters) > 4 else 0)
+        idle = counters[3] + (counters[4] if len(counters) > _PROC_STAT_IOWAIT_FIELD else 0)
         return sum(counters), idle
 
     total0, idle0 = snap()
@@ -392,9 +397,12 @@ def make_sample(metric: Metric, temp_path: Path | None) -> tuple[int, int]:
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser."""
     parser = argparse.ArgumentParser(description="ID-COOLING Temp Display driver")
     _ = parser.add_argument(
-        "--metric", choices=["temp", "usage", "freq"], default="temp"
+        "--metric",
+        choices=["temp", "usage", "freq"],
+        default="temp",
     )
     _ = parser.add_argument(
         "--interval",
@@ -419,12 +427,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="non-negative seconds to wait for the device",
     )
     _ = parser.add_argument(
-        "--once", action="store_true", help="send one update and exit"
+        "--once",
+        action="store_true",
+        help="send one update and exit",
     )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Resolve device and sensor, then push samples until stopped."""
     args = Arguments()
     _ = build_argument_parser().parse_args(argv, namespace=args)
     temp_path = args.temp_path or (find_temp_path() if args.metric == "temp" else None)
@@ -447,11 +458,13 @@ def main(argv: Sequence[str] | None = None) -> None:
                 failures += 1
                 LOGGER.warning(
                     "skipping invalid sensor sample (%d/%d): %s",
-                    failures, MAX_CONSECUTIVE_FAILURES, exc,
+                    failures,
+                    MAX_CONSECUTIVE_FAILURES,
+                    exc,
                 )
                 if failures >= MAX_CONSECUTIVE_FAILURES:
                     raise DriverError(
-                        f"sensor sampling failed {failures} times in a row: {exc}"
+                        f"sensor sampling failed {failures} times in a row: {exc}",
                     ) from exc
 
             if args.once:
@@ -467,6 +480,6 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-    except (DriverError, OSError) as exc:
-        LOGGER.error("%s", exc)
+    except (DriverError, OSError):
+        LOGGER.exception("fatal driver error")
         raise SystemExit(1) from None
