@@ -1,0 +1,2 @@
+# Create an unprivileged account used only by idcool-display.service.
+u idcool-display - "ID-COOLING display service" / -

@@ -43,6 +43,13 @@ Every command is a 64-byte HID output report:
 Send `SHOW(1)` once to enable the display, then push the metric you want on an
 interval (the vendor app uses ~1 s).
 
+The wire field can encode any unsigned 16-bit value, but that does not mean all
+values are meaningful to the firmware. The Linux driver therefore applies a
+separate host-side safety policy: temperature `0..150` °C, frequency
+`0..20000` MHz, usage `0..100`, and show `0..1`. These limits are sanity checks,
+not additional claims about the protocol. It also limits updates to at most
+five per second; the default remains the vendor-like one-second interval.
+
 ### Writing on Linux
 
 The device uses **unnumbered** HID reports, so a raw `write()` to `/dev/hidrawN`

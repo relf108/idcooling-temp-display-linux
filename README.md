@@ -21,14 +21,23 @@ some **Aftershock** PCs.
 First confirm you actually have this device:
 
 ```bash
-lsusb | grep -i 1a86:e317        # ...QinHeng Electronics IDCOOL-C
+lsusb | grep -i 1a86:e317
 ```
 
-Requirements: Python 3 (standard library only) and a Linux `hidraw` device.
-CPU temperature is read from `/sys/class/hwmon` (AMD `k10temp` / Intel
-`coretemp` auto-detected; override with `--temp-path`).
+### Requirements
+
+- Python 3 (standard library only)
+- Linux `hidraw` device
+
+CPU temperature is read from `/sys/class/hwmon` (AMD `k10temp` / `zenpower`
+and Intel `coretemp` auto-detected). On systems with an unrecognized sensor,
+select it explicitly with `--temp-path`.
 
 ### Try it first (no install)
+
+In some cases the cooler display may take a second or two to reflect a value.
+If so, `--once` may be insufficient; use the continuous command and stop it
+with `Ctrl+C` after confirming the display updates.
 
 ```bash
 sudo ./idcool_display.py --once            # one update, then exit
@@ -36,8 +45,8 @@ sudo ./idcool_display.py                   # run continuously (temp, every 1s)
 sudo ./idcool_display.py --metric usage    # or: usage / freq
 ```
 
-`sudo` is only needed because `/dev/hidraw*` is root-only until the udev rule
-(below) is installed.
+`sudo` is normally needed for a one-off test because `/dev/hidraw*` is
+root-only until an appropriate udev rule is installed.
 
 ### NixOS (flakes)
 
@@ -75,34 +84,50 @@ in
 }
 ```
 
-### Other distros (systemd)
+### Other distributions (systemd)
+
+The repository also includes a conventional systemd unit and udev rule:
 
 ```bash
 sudo install -m0755 idcool_display.py /usr/local/bin/idcool-display
 sudo install -m0644 udev/99-idcooling-temp-display.rules /etc/udev/rules.d/
 sudo install -m0644 systemd/idcool-display.service /etc/systemd/system/
-sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=hidraw
+sudo systemctl daemon-reload
 sudo systemctl enable --now idcool-display.service
 ```
 
-To show a different metric, change `--metric` in the service file, then
+To show a different metric, change `--metric` in the service file, then run
 `sudo systemctl daemon-reload && sudo systemctl restart idcool-display`.
 
-The udev rule gives the device a stable `/dev/idcool` symlink and group access
-for manual testing; the daemon itself resolves the device by USB VID:PID, so it
-doesn't depend on the symlink or on start order.
+The udev rule creates a stable `/dev/idcool` symlink and grants group access for
+manual testing. The daemon still resolves the hidraw node by USB VID:PID and
+verifies the opened device, so it does not rely on that symlink.
+
+#### Optional Fedora example
+
+An optional least-privilege setup using a dedicated service account is available
+under [`contrib/fedora/`](contrib/fedora/README.md). It is independent of the
+default systemd files and does not change the NixOS setup. Use one setup or the
+other, not both: their udev rules share the installed filename
+`99-idcooling-temp-display.rules` but grant access to different groups
+(`plugdev` in the default setup, `idcool-display` in the Fedora setup). Each
+service must be installed with its matching rule.
 
 ## Troubleshooting
 
-- **`... display (1A86:E317) not found`** — the cooler isn't plugged in, or you
-  lack permission for `/dev/hidraw*`. Run as root, or install the udev rule (and
-  for manual non-root runs, make sure your user is in its group).
-- **Permission denied on `/dev/hidraw*`** — the udev rule ships `GROUP="plugdev"`;
-  change it to a group you're in, or just run the service (it runs as root).
-- **Wrong temperature** (a GPU/chipset sensor instead of the CPU) —
-  auto-detection picked the wrong hwmon. Pass
-  `--temp-path /sys/class/hwmon/hwmonN/tempM_input` (find it with `sensors` or
-  by reading the `*/name` files under `/sys/class/hwmon`).
+- **`... display (1A86:E317) not found`** — the cooler is not plugged in or did
+  not enumerate as the expected USB HID device. Confirm it with
+  `lsusb -d 1a86:e317`.
+- **Permission denied on `/dev/hidraw*`** — manual runs need `sudo` unless your
+  user belongs to the group selected by the installed udev rule. The default
+  systemd unit runs as root; the optional Fedora unit instead uses its dedicated
+  `idcool-display` account and matching udev rule.
+- **No supported CPU temperature sensor found** — pass
+  `--temp-path /sys/class/hwmon/hwmonN/tempM_input` after identifying the CPU
+  package sensor with `sensors` and the `*/name` / `temp*_label` files. This
+  explicit selection avoids accidentally displaying a non-CPU sensor.
 - **Screen goes blank after suspend** — `systemctl restart idcool-display`
   (the service also auto-restarts on failure).
 
@@ -114,8 +139,17 @@ doesn't depend on the symlink or on start order.
 | `flake.nix` | flake exposing the NixOS module + a `nix run` package |
 | `PROTOCOL.md` | full HID protocol spec + how it was decoded |
 | `udev/99-idcooling-temp-display.rules` | `/dev/idcool` symlink + group access |
-| `systemd/idcool-display.service` | systemd unit |
+| `systemd/idcool-display.service` | standard systemd unit |
+| `contrib/fedora/` | optional unprivileged Fedora/systemd setup |
 | `nix/idcool-display.nix` | NixOS module |
+| `tests/test_idcool_display.py` | standard-library unit tests |
+
+## Verified hardware
+
+This is not an exhaustive list of supported models, only devices reported to
+work with this driver.
+
+- ID-COOLING FROZN A410 TD
 
 ## Credits
 

@@ -1,0 +1,41 @@
+[Unit]
+Description=ID-COOLING Temp Display temperature feed
+Documentation=https://github.com/relf108/idcooling-temp-display-linux
+# The driver discovers the hidraw node itself and waits for it to appear.
+
+[Service]
+ExecStart=/usr/local/bin/idcool-display --metric temp --interval 1
+Restart=on-failure
+RestartSec=5
+
+# This optional unit pairs with the Fedora sysusers and udev files in this
+# directory so the driver can run without root or Linux capabilities.
+User=idcool-display
+Group=idcool-display
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# PrivateDevices cannot be enabled because the dynamic hidraw node must remain
+# visible. The remaining settings reduce access not needed by this driver.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateMounts=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

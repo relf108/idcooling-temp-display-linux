@@ -1,0 +1,3 @@
+# Optional Fedora rule for the dedicated account created by
+# idcool-display.sysusers. The driver verifies VID:PID again after opening.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="e317", MODE="0660", GROUP="idcool-display", SYMLINK+="idcool"
